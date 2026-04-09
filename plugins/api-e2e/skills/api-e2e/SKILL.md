@@ -11,6 +11,8 @@ Analyze the current branch diff, discover every API endpoint that was added or m
 
 Works with any backend framework — Express, Fastify, NestJS, FastAPI, Flask, Django, Rails, Go/chi, Go/gin, Laravel, Spring Boot, and others.
 
+**You MUST follow the steps below in order. Do NOT skip any step. Each step produces output that later steps depend on.**
+
 ## Step 1 — Understand the project and service architecture
 
 Before doing anything else, read available project documentation to understand the service topology, request routing, and inter-service communication:
@@ -115,9 +117,55 @@ Classify each changed file by its architectural role. The concepts are universal
 
 Trace service → controller → route to determine which HTTP endpoints are actually affected.
 
-## Step 4 — Discover endpoints from client/frontend code
+## Step 4 — Classify the nature of changes (MANDATORY — do not skip)
 
-In addition to reading server-side route definitions, search for **client-side code** that calls the API. Frontend service files, API client modules, and SDK wrappers often reveal the exact endpoints, request/response types, required headers, and gateway path prefixes.
+**STOP. Before extracting endpoints or building any test plan, you MUST analyze the actual diff content and classify the changes.** This step determines whether you need simple CRUD tests, behavioral tests, load tests, or all of them. Skipping this step will produce an incomplete test plan.
+
+Read the diff content:
+
+```bash
+# Diff summary
+git diff $MAIN_REF...HEAD --stat
+
+# Read the actual code changes in key files (services, handlers, infrastructure)
+git diff $MAIN_REF...HEAD -- <key-changed-files> | head -500
+
+# Scan for behavioral indicators across the entire diff
+git diff $MAIN_REF...HEAD | grep -iE "redis|INCR|DECR|semaphore|acquire|release|event.handler|webhook|queue|worker|rate.limit|concurrency|throttl|consumer|publish|subscribe|lock|mutex|slot" | head -30
+```
+
+Now fill in this classification table. **You MUST print this table in your output with YES or NO for each row:**
+
+```
+Change Classification:
+| Category                       | Detected? | Evidence                        | Required test parts |
+|--------------------------------|-----------|---------------------------------|---------------------|
+| New CRUD endpoints             | YES / NO  | <what you found or "none">      | → Part A            |
+| Business logic changes         | YES / NO  | <what you found or "none">      | → Part B            |
+| Rate limiting / throttling     | YES / NO  | <what you found or "none">      | → Part C            |
+| Async / event-driven flows     | YES / NO  | <what you found or "none">      | → Part B            |
+| Concurrency control            | YES / NO  | <what you found or "none">      | → Part C            |
+| Infrastructure / config        | YES / NO  | <what you found or "none">      | → Part D            |
+| Database schema changes        | YES / NO  | <what you found or "none">      | → Part A            |
+```
+
+**Indicators to look for:**
+
+| Category | What to grep/look for in the diff |
+|----------|----------------------------------|
+| **New CRUD endpoints** | New `@router.get/post/put/delete`, new route definitions, new controller methods |
+| **Business logic changes** | Modified service methods, new domain validation rules, changed handler logic |
+| **Rate limiting / throttling** | `redis`, `INCR`, `DECR`, `rate_limit`, `throttle`, `window`, `counter` |
+| **Async / event-driven flows** | `event_handler`, `webhook`, `consumer`, `publish`, `subscribe`, `queue`, `worker`, `broker` |
+| **Concurrency control** | `semaphore`, `acquire`, `release`, `lock`, `mutex`, `slot`, `concurrency` |
+| **Infrastructure / config** | New settings, env vars, middleware changes, caching logic |
+| **Database schema** | New migrations, model field additions, index changes |
+
+**MANDATORY RULE:** Every row marked YES in the "Detected?" column means the corresponding test Part (A/B/C/D) MUST appear in the test plan at Step 8. If you skip any required Part, your test plan is wrong.
+
+## Step 5 — Discover endpoints from client/frontend code
+
+Search for **client-side code** that calls the API. Frontend service files, API client modules, and SDK wrappers reveal the exact endpoints, request/response types, required headers, and gateway path prefixes.
 
 ```bash
 # Find frontend/client API service files
@@ -141,7 +189,7 @@ For each client file found:
 
 If client code reveals endpoints not found in server-side route files (or vice versa), include both — gaps between client and server are themselves worth testing.
 
-## Step 5 — Extract affected endpoints
+## Step 6 — Extract affected endpoints from server code
 
 Read each changed route/controller file and extract endpoint definitions. Use the patterns below for the detected stack:
 
@@ -198,35 +246,6 @@ Also note:
 - Validation middleware or schema decorators (determines expected 400/422 shape)
 - Any state-mutating operations that need sequencing
 
-## Step 6 — Analyze the semantic nature of changes (classify change type)
-
-**THIS STEP IS CRITICAL — DO NOT SKIP IT.** The test plan quality depends entirely on correctly classifying what the changes do. Without this step, you will only generate basic CRUD tests and miss the most important behavioral/concurrency/async tests.
-
-Analyze the **actual git diff content** (not just file names) to understand what the changes do:
-
-```bash
-# Read the actual diff to understand what changed
-git diff $MAIN_REF...HEAD --stat
-git diff $MAIN_REF...HEAD -- <key-changed-files> | head -500
-
-# Look specifically for behavioral indicators in the diff
-git diff $MAIN_REF...HEAD | grep -E "redis|INCR|DECR|semaphore|acquire|release|event_handler|webhook|queue|worker|rate.limit|concurrency|throttl" | head -30
-```
-
-Classify the changes into one or more categories. **You MUST output this classification table explicitly** before proceeding to Step 7:
-
-| Category | Indicators in diff | Testing strategy | Applies to this branch? |
-|----------|-------------------|------------------|------------------------|
-| **New CRUD endpoints** | New route definitions, new controller methods | → Part A: endpoint CRUD tests | YES / NO |
-| **Business logic changes** | Modified service/handler code, new domain rules | → Part B: behavioral verification | YES / NO |
-| **Rate limiting / throttling** | Redis keys, counters, semaphores, `INCR`/`DECR` | → Part C: load/concurrency testing | YES / NO |
-| **Async / event-driven flows** | Event handlers, webhook consumers, background workers, queues | → Part B: temporal testing | YES / NO |
-| **Concurrency control** | Locks, semaphores, mutexes, slot acquire/release | → Part C: concurrent batches | YES / NO |
-| **Infrastructure / config** | Settings, env vars, middleware, caching | → Part D: infrastructure checks | YES / NO |
-| **Database schema** | Migrations, model changes | → Part A: state persistence | YES / NO |
-
-**MANDATORY RULE:** If ANY category other than "New CRUD endpoints" is marked YES, you MUST include the corresponding test plan parts (B, C, or D). Generating only Part A (CRUD tests) when the diff contains event handlers, Redis operations, or concurrency logic is an incomplete test plan.
-
 ## Step 7 — Prompt for auth token
 
 Output this to the user and wait:
@@ -239,11 +258,30 @@ Output this to the user and wait:
 
 Store tokens as `$TOKEN_<ROLE>` (e.g. `$TOKEN_ADMIN`, `$TOKEN_USER`). If only one role exists, use `$TOKEN`. Also store any additional required headers.
 
-## Step 8 — Build the test plan
+## Step 8 — Verify completeness checklist, then build the test plan
 
-Based on the change classification from Step 6, build an appropriate test plan. **Include every Part (A/B/C/D) that was marked YES in the Step 6 classification table.** If you only generate Part A when other categories were marked YES, your test plan is incomplete — go back and add the missing parts.
+**Before writing any test cases, verify you have completed all prior steps.** Print this checklist:
 
-For example, if the diff contains both new API endpoints AND Redis concurrency semaphores AND event handler changes, your test plan MUST include Part A + Part B + Part C + Part D.
+```
+Pre-test-plan checklist:
+  [x] Step 1: Read project docs — <what you found: service topology, CLI tools, etc.>
+  [x] Step 2: Detected tech stack — <framework, port, base URL>
+  [x] Step 3: Found changed files — <N files changed>
+  [x] Step 4: Classified changes — <list which categories were YES>
+  [x] Step 5: Checked client code — <what you found or "no client changes">
+  [x] Step 6: Extracted endpoints — <N endpoints found>
+  [x] Step 7: Got auth token — <yes/pending>
+
+  Required test plan parts based on Step 4 classification:
+  - Part A (CRUD): <YES/NO>
+  - Part B (Behavioral/async): <YES/NO>
+  - Part C (Load/concurrency): <YES/NO>
+  - Part D (Infrastructure): <YES/NO>
+```
+
+If any step shows `[ ]` (not completed), go back and complete it before proceeding.
+
+Now build the test plan. **Include every Part that is marked YES above.**
 
 ### Part A — Endpoint CRUD tests (always include for new/changed endpoints)
 
@@ -268,7 +306,7 @@ For each endpoint, generate test cases:
 10. **Empty result** — query that matches nothing → expect 200 with empty list
 11. **Boundary values** — `page=0`, `limit=0`, very large offset
 
-### Part B — Behavioral / async flow tests (include when changes affect event-driven or async processing)
+### Part B — Behavioral / async flow tests (when Step 4 classified business logic, async, or event-driven changes as YES)
 
 When the diff reveals changes to event handlers, background workers, webhook consumers, or async state machines, design tests that:
 
@@ -297,7 +335,7 @@ for i in $(seq 1 <max_attempts>); do
 done
 ```
 
-### Part C — Load / concurrency tests (include when changes affect rate limiting, concurrency control, or throttling)
+### Part C — Load / concurrency tests (when Step 4 classified rate limiting or concurrency control as YES)
 
 When the diff reveals rate limiting, concurrency semaphores, or throttling logic:
 
@@ -327,7 +365,7 @@ When the diff reveals rate limiting, concurrency semaphores, or throttling logic
    docker exec <db-container> mysql -u... -p... -e "SELECT count(*) FROM ... WHERE status='queued'"
    ```
 
-### Part D — Infrastructure observability checks (include when changes affect Redis, queues, or background processing)
+### Part D — Infrastructure observability checks (when Step 4 classified infrastructure changes as YES)
 
 When the system uses Redis, message queues, or other infrastructure that the changes touch:
 
@@ -353,7 +391,7 @@ Adapt the auth flag to the scheme in use:
 - Bearer token → `-H "Authorization: Bearer $TOKEN"`
 - API key header → `-H "X-API-Key: $TOKEN"` (or whichever header the API uses)
 - Cookie / session → `-b "session=<value>"`
-- Additional headers → include all required headers discovered in Steps 1 and 4
+- Additional headers → include all required headers discovered in Steps 1 and 5
 
 For each test case output:
 - `✓ [N] <description>` on pass
