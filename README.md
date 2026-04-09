@@ -13,7 +13,6 @@ A collection of [Claude Code](https://claude.ai/code) skills — slash commands 
 ### Option A — Claude Code CLI
 
 ```bash
-# Install a specific skill
 claude skills install https://github.com/kmtusher97/claude-skills/tree/main/api-e2e
 ```
 
@@ -30,7 +29,6 @@ curl -sSL https://raw.githubusercontent.com/kmtusher97/claude-skills/main/$SKILL
 
 ```bash
 git clone https://github.com/kmtusher97/claude-skills ~/claude-skills
-# Then symlink whichever skills you want:
 ln -s ~/claude-skills/api-e2e ~/.claude/skills/api-e2e
 ```
 
