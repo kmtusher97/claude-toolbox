@@ -11,7 +11,31 @@ Analyze the current branch diff, discover every API endpoint that was added or m
 
 Works with any backend framework — Express, Fastify, NestJS, FastAPI, Flask, Django, Rails, Go/chi, Go/gin, Laravel, Spring Boot, and others.
 
-## Step 1 — Detect tech stack and base URL
+## Step 1 — Understand the project and service architecture
+
+Before doing anything else, read available project documentation to understand the service topology, request routing, and inter-service communication:
+
+```bash
+# Read project-level CLAUDE.md, README, or architecture docs
+cat CLAUDE.md README.md docs/ARCHITECTURE.md 2>/dev/null | head -500
+
+# Check for docker-compose to understand service topology
+cat docker-compose.yaml docker-compose.yml 2>/dev/null | head -200
+
+# Check for API gateway or reverse proxy configs
+find . -maxdepth 4 \( -name "*.yaml" -o -name "*.yml" -o -name "*.conf" \) | xargs grep -l "upstream\|proxy_pass\|routes\|gateway" 2>/dev/null | head -10
+```
+
+Extract from the docs:
+- **Service topology**: Which services exist, their ports, how requests are routed
+- **API gateway prefixes**: Path prefixes added by API gateway/reverse proxy (e.g., `/hypatia/api/*` routes to `hypatia:8026`)
+- **Auth mechanism**: How authentication works (tokens, cookies, API keys), what headers are required
+- **Inter-service communication**: Event buses, message queues, webhook brokers, background workers
+- **Database and cache infrastructure**: MySQL, PostgreSQL, Redis, etc.
+
+This context is critical for later steps — especially for constructing correct URLs and understanding async/event-driven behavior.
+
+## Step 2 — Detect tech stack and base URL
 
 Identify the tech stack:
 
@@ -50,9 +74,9 @@ find . -maxdepth 5 \( \
 grep "PORT" .env .env.local .env.development .env.example 2>/dev/null | head -5
 ```
 
-Use `http://localhost:<PORT>` as `$BASE_URL`. If the server is not reachable, stop here and tell the user.
+Use `http://localhost:<PORT>` as `$BASE_URL`. If the project uses an API gateway/reverse proxy (discovered in Step 1), use the gateway URL and include path prefixes accordingly. If the server is not reachable, stop here and tell the user.
 
-## Step 2 — Find changed files on this branch
+## Step 3 — Find changed files on this branch
 
 ```bash
 git diff origin/main...HEAD --name-only
@@ -67,11 +91,39 @@ Classify each changed file by its architectural role. The concepts are universal
 | **Controller / Handler** | Handles request, calls services | `*controller*.ts`, `views.py`, `*_handler.go`, `*Resource.php` |
 | **Service / Use-case** | Business logic | `*service*.ts`, `services.py`, `*_service.go` |
 | **Schema / DTO / Serializer** | Request/response shape & validation | `*.schema.ts`, `serializers.py`, `*Dto.java`, `*Request.java` |
-| **Client / Frontend** | Makes HTTP calls to the API | `*.tsx`, `*.jsx`, `*.vue`, `*.svelte` |
+| **Client / Frontend** | Makes HTTP calls to the API | `*.tsx`, `*.jsx`, `*.vue`, `*.svelte`, `*Service.ts`, `*Api.ts` |
+| **Event handler / Worker** | Async processing, background jobs | `*handler*.py`, `*worker*.ts`, `*consumer*.py`, `*listener*.py` |
+| **Config / Infrastructure** | Rate limits, queues, Redis, caching | `*config*.py`, `*settings*.py`, `*middleware*.ts` |
 
 Trace service → controller → route to determine which HTTP endpoints are actually affected.
 
-## Step 3 — Extract affected endpoints
+## Step 4 — Discover endpoints from client/frontend code
+
+In addition to reading server-side route definitions, search for **client-side code** that calls the API. Frontend service files, API client modules, and SDK wrappers often reveal the exact endpoints, request/response types, required headers, and gateway path prefixes.
+
+```bash
+# Find frontend/client API service files
+find . -maxdepth 6 \( \
+  -name "*Service.ts" -o -name "*service.ts" -o \
+  -name "*Api.ts" -o -name "*api.ts" -o \
+  -name "*Client.ts" -o -name "*client.ts" -o \
+  -name "*Repository.ts" -o -name "*repository.ts" \
+\) 2>/dev/null | head -20
+
+# Search for fetch/axios calls referencing changed API paths
+grep -rn "fetch\|axios\|httpClient\|apiClient\|\$http" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" 2>/dev/null | grep -i "<relevant-path-keyword>" | head -20
+```
+
+For each client file found:
+
+1. **Extract the exact API paths** — including any gateway/proxy prefixes the client adds (e.g., `/hypatia/api/v1/...` instead of just `/api/v1/...`)
+2. **Extract request/response types** — TypeScript interfaces, Zod schemas, PropTypes, or inline type annotations that define the expected payload shapes
+3. **Note HTTP client configuration** — base URL, default headers (auth tokens, content-type, custom headers like `x-opal-*`), interceptors, error handling
+4. **Cross-reference with server endpoints** — the client code tells you the "real" URL the browser hits; use this for curl commands
+
+If client code reveals endpoints not found in server-side route files (or vice versa), include both — gaps between client and server are themselves worth testing.
+
+## Step 5 — Extract affected endpoints
 
 Read each changed route/controller file and extract endpoint definitions. Use the patterns below for the detected stack:
 
@@ -120,15 +172,39 @@ Route::(get|post|put|patch|delete)\(
 
 Build a table of all affected endpoints:
 
-| Method | Path | Auth required | Roles / Scopes | Description |
-|--------|------|---------------|----------------|-------------|
+| Method | Path (as seen by client) | Auth required | Roles / Scopes | Description |
+|--------|--------------------------|---------------|----------------|-------------|
 
 Also note:
 - Which endpoints are role-restricted vs public
 - Validation middleware or schema decorators (determines expected 400/422 shape)
 - Any state-mutating operations that need sequencing
 
-## Step 4 — Prompt for auth token
+## Step 6 — Analyze the semantic nature of changes (classify change type)
+
+Before building the test plan, analyze the **git diff content** (not just file names) to understand what the changes actually do. This determines whether you need simple CRUD endpoint testing, behavioral/load testing, or both.
+
+```bash
+# Read the actual diff to understand what changed
+git diff origin/main...HEAD --stat
+git diff origin/main...HEAD -- <key-changed-files> | head -500
+```
+
+Classify the changes into one or more categories:
+
+| Category | Indicators | Testing strategy |
+|----------|-----------|------------------|
+| **New CRUD endpoints** | New route definitions, new controller methods | Standard endpoint testing (happy path, auth, validation) |
+| **Business logic changes** | Modified service/handler code, new domain rules | Behavioral verification — trigger the flow end-to-end |
+| **Rate limiting / throttling** | Redis keys, counters, semaphores, `INCR`/`DECR` | Load/concurrency testing with batched parallel requests |
+| **Async / event-driven flows** | Event handlers, webhook consumers, background workers, queues | Temporal testing — trigger, wait, monitor for completion |
+| **Concurrency control** | Locks, semaphores, mutexes, slot acquire/release | Concurrent request batches with monitoring |
+| **Infrastructure / config** | Settings, env vars, middleware, caching | Config verification, boundary testing |
+| **Database schema** | Migrations, model changes | State persistence verification |
+
+If the changes include **async/event-driven flows** or **concurrency control**, the test plan MUST include behavioral tests (Steps 8-9), not just endpoint CRUD tests.
+
+## Step 7 — Prompt for auth token
 
 Output this to the user and wait:
 
@@ -136,12 +212,17 @@ Output this to the user and wait:
 >
 > - If the API uses a different auth scheme (cookie, API key header, session), paste that value and label the header name.
 > - If you need tokens for **multiple roles** (e.g. admin vs. regular user), paste each one labeled separately.
+> - If the curl command includes other required headers (e.g., `x-opal-instance-id`), include those too.
 
-Store tokens as `$TOKEN_<ROLE>` (e.g. `$TOKEN_ADMIN`, `$TOKEN_USER`). If only one role exists, use `$TOKEN`.
+Store tokens as `$TOKEN_<ROLE>` (e.g. `$TOKEN_ADMIN`, `$TOKEN_USER`). If only one role exists, use `$TOKEN`. Also store any additional required headers.
 
-## Step 5 — Build the test plan
+## Step 8 — Build the test plan
 
-For each endpoint, generate test cases. Adapt auth mechanism to what the API uses:
+Based on the change classification from Step 6, build an appropriate test plan. The plan should include **all applicable sections** below.
+
+### Part A — Endpoint CRUD tests (always include for new/changed endpoints)
+
+For each endpoint, generate test cases:
 
 **Standard cases (always include)**
 1. **Happy path** — valid request with correct auth → expect 2xx
@@ -162,11 +243,84 @@ For each endpoint, generate test cases. Adapt auth mechanism to what the API use
 10. **Empty result** — query that matches nothing → expect 200 with empty list
 11. **Boundary values** — `page=0`, `limit=0`, very large offset
 
+### Part B — Behavioral / async flow tests (include when changes affect event-driven or async processing)
+
+When the diff reveals changes to event handlers, background workers, webhook consumers, or async state machines, design tests that:
+
+1. **Trigger the async flow** — make the API call that initiates the event/workflow
+2. **Monitor for completion** — write a polling/monitoring script that checks the expected outcome:
+   - Query the database for expected state transitions
+   - Check Redis for expected key changes
+   - Poll a status endpoint until completion or timeout
+   - Read service logs for expected log entries
+3. **Verify the end state** — confirm the final state matches expectations
+
+Example monitoring script pattern:
+```bash
+# Trigger the action
+curl -s -X POST "$BASE_URL/trigger-endpoint" -H "Authorization: Bearer $TOKEN" -d '...'
+
+# Monitor for completion (poll every N seconds, timeout after M seconds)
+for i in $(seq 1 <max_attempts>); do
+  result=$(curl -s "$BASE_URL/status-endpoint" -H "Authorization: Bearer $TOKEN")
+  status=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+  if [ "$status" = "completed" ]; then
+    echo "✓ Flow completed after ${i} checks"
+    break
+  fi
+  sleep <interval>
+done
+```
+
+### Part C — Load / concurrency tests (include when changes affect rate limiting, concurrency control, or throttling)
+
+When the diff reveals rate limiting, concurrency semaphores, or throttling logic:
+
+1. **Design batched concurrent requests** — send N requests in parallel batches with controlled delays:
+   ```bash
+   # Send batch of 5 concurrent requests
+   for i in $(seq 1 5); do
+     curl -s -X POST "$BASE_URL/endpoint" -H "Authorization: Bearer $TOKEN" -d '...' &
+   done
+   wait
+   sleep <delay_between_batches>
+   ```
+
+2. **Monitor rate limiting behavior** — check that the system correctly:
+   - Accepts requests within the limit
+   - Rejects/queues requests that exceed the limit
+   - Returns appropriate error codes (429 Too Many Requests, or custom reschedule responses)
+
+3. **Verify recovery** — after the rate limit window passes, confirm new requests are accepted
+
+4. **Check infrastructure state** — examine Redis counters, queue depths, or database state to confirm the limiting mechanism is working:
+   ```bash
+   # Check Redis counters (if accessible)
+   docker exec <redis-container> redis-cli GET "rate_limit_key:*"
+
+   # Check database state
+   docker exec <db-container> mysql -u... -p... -e "SELECT count(*) FROM ... WHERE status='queued'"
+   ```
+
+### Part D — Infrastructure observability checks (include when changes affect Redis, queues, or background processing)
+
+When the system uses Redis, message queues, or other infrastructure that the changes touch:
+
+1. **Pre-test baseline** — capture initial state of relevant infrastructure
+2. **Post-test verification** — confirm expected state changes occurred
+3. **Log verification** — check service logs for expected entries (rate limit hits, queue operations, etc.)
+
+```bash
+# Example: Check service logs for expected patterns
+docker logs <service> --since="<start_time>" 2>&1 | grep -c "rate_limit_exceeded"
+docker logs <service> --since="<start_time>" 2>&1 | grep -c "concurrency_slot_acquired"
+```
+
 Present the full numbered checklist to the user, then ask:
 
 > Ready to execute? (yes / skip \<number\> / abort)
 
-## Step 6 — Execute tests
+## Step 9 — Execute tests
 
 Run each test case sequentially using `curl`. Use `python3 -c` for JSON parsing (do **not** assume `jq` is installed).
 
@@ -174,6 +328,7 @@ Adapt the auth flag to the scheme in use:
 - Bearer token → `-H "Authorization: Bearer $TOKEN"`
 - API key header → `-H "X-API-Key: $TOKEN"` (or whichever header the API uses)
 - Cookie / session → `-b "session=<value>"`
+- Additional headers → include all required headers discovered in Steps 1 and 4
 
 For each test case output:
 - `✓ [N] <description>` on pass
@@ -183,7 +338,9 @@ For each test case output:
 
 **Cleanup:** after all tests, run any registered cleanup calls (soft-deletes, reverting state) even if earlier tests failed.
 
-## Step 7 — Report
+**For behavioral/load tests:** execute the monitoring scripts, capture their output, and include results in the report.
+
+## Step 10 — Report
 
 Print a summary table:
 
@@ -193,6 +350,13 @@ Print a summary table:
 | 2 | POST | /api/v1/... | Auth missing | ✓ 401 |
 | 3 | GET  | /api/v1/... | Wrong role | ✓ 403 |
 
+For behavioral/load tests, add a separate section:
+
+### Behavioral Test Results
+| # | Scenario | Triggered | Expected Outcome | Actual Outcome | Result |
+|---|----------|-----------|------------------|----------------|--------|
+| 1 | Rate limit enforced under load | 30 requests in 6 batches | 10 accepted, 20 rejected/queued | 10 accepted, 20 queued | ✓ |
+
 Final line: **`X/Y tests passed.`**
 
 If any tests failed, list them with actual vs expected values and suggest likely causes.
@@ -201,9 +365,12 @@ If any tests failed, list them with actual vs expected values and suggest likely
 
 - Never hardcode tokens in output — always refer to them as `$TOKEN`, `$TOKEN_ADMIN`, etc.
 - Always clean up test data created during the run
-- If the server is not reachable, stop at Step 1 and tell the user
+- If the server is not reachable, stop at Step 2 and tell the user
 - Use `python3` for JSON parsing — never assume `jq` is available
 - For sequenced tests (create → verify → cleanup), track created IDs and use them in subsequent steps
-- Skip client file analysis if only server files changed, and vice versa
 - If `$ARGUMENTS` is provided, treat it as the base ref to diff against instead of `origin/main`
 - When the framework is ambiguous, read a sample route file before guessing — don't assume
+- Always read project documentation (CLAUDE.md, README) before starting — service architecture context is essential
+- When changes affect event handlers, workers, or async flows, behavioral tests are mandatory — not just endpoint CRUD tests
+- Use client/frontend code as a primary source for discovering the correct API URLs, headers, and payload shapes
+- Construct curl URLs using the gateway/proxy prefix discovered from client code, not the raw server-side route path
