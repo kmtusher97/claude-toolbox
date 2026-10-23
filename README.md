@@ -47,7 +47,7 @@ Once installed via the plugin marketplace, invoke any skill inside a Claude Code
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
 - `curl` and `python3` in your shell
-- `ffmpeg` for screen-record-chrome (plus `gnome-screenshot` on GNOME Linux; `screencapture` is built in on macOS)
+- `ffmpeg` for screen-record-chrome, plus `maim` or `scrot` on Linux X11 (`gnome-screenshot` on GNOME Wayland, which flashes the screen on each shot); `screencapture` is built in on macOS
 
 ## License
 

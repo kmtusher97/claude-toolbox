@@ -24,18 +24,18 @@ done
 if [ "$(uname -s)" = "Darwin" ]; then
   # First run needs Screen Recording permission for the terminal app (System Settings > Privacy & Security).
   shot() { screencapture -x -t png "$1"; }
-elif command -v gnome-screenshot >/dev/null; then
-  shot() { gnome-screenshot -f "$1"; }   # the only tool GNOME Wayland (42+) allows
-elif [ -n "${WAYLAND_DISPLAY:-}" ] && command -v grim >/dev/null; then
-  shot() { grim "$1"; }                  # wlroots compositors (sway, Hyprland)
 elif [ -z "${WAYLAND_DISPLAY:-}" ] && command -v maim >/dev/null; then
-  shot() { maim "$1"; }
+  shot() { maim "$1"; }                  # X11: no flash, unlike gnome-screenshot
 elif [ -z "${WAYLAND_DISPLAY:-}" ] && command -v scrot >/dev/null; then
   shot() { scrot -o "$1"; }
 elif [ -z "${WAYLAND_DISPLAY:-}" ] && command -v import >/dev/null; then
   shot() { import -window root "$1"; }
+elif [ -n "${WAYLAND_DISPLAY:-}" ] && [[ "${XDG_CURRENT_DESKTOP:-}" != *GNOME* ]] && command -v grim >/dev/null; then
+  shot() { grim "$1"; }                  # wlroots compositors (sway, Hyprland)
+elif command -v gnome-screenshot >/dev/null; then
+  shot() { gnome-screenshot -f "$1"; }   # GNOME Wayland (42+) allows only this; it flashes the screen on each shot
 else
-  echo "no screenshot tool found. Linux: sudo apt install gnome-screenshot (GNOME) | grim (sway/Hyprland) | maim or scrot (X11)" >&2
+  echo "no screenshot tool found. Linux: sudo apt install maim or scrot (X11) | grim (sway/Hyprland) | gnome-screenshot (GNOME Wayland)" >&2
   exit 1
 fi
 

@@ -33,6 +33,7 @@ With no `SESSION_DIR` it uses the newest session. Output defaults to `<SESSION_D
 - `$ARGUMENTS` can carry the folder, interval, or FPS the user wants; map them to the flags above.
 - Videos land next to their frame folders, in `~/.screen-recordings/<timestamp>.mp4` by default.
 - macOS: uses `screencapture`; the terminal app needs Screen Recording permission (System Settings > Privacy & Security). `brew install ffmpeg`.
-- Linux: picks `gnome-screenshot` (required on GNOME Wayland, where other tools are blocked; it may flash the screen on each shot),
-  else `grim` (sway/Hyprland), else `maim`/`scrot`/`import` on X11. `sudo apt install ffmpeg gnome-screenshot`.
+- Linux X11: uses `maim`, else `scrot`, else `import` (no screen flash). `sudo apt install ffmpeg maim`.
+- Linux Wayland: `grim` on sway/Hyprland; on GNOME it must be `gnome-screenshot`, the only tool GNOME allows, and it flashes the
+  screen on each shot (use a longer interval, or switch to an X11 session). `sudo apt install ffmpeg gnome-screenshot`.
 - Report the output path and frame count when done. Don't delete the frames unless asked.
