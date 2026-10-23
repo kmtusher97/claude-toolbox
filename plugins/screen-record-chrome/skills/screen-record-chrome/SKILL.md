@@ -12,6 +12,20 @@ Scripts live in the `scripts/` folder next to this file (`~/.claude/skills/scree
 Defaults are screenshot folder `~/.screen-recordings`, 2s interval, 10fps video; override with
 `-d`/`-i`/`-f`, env vars (`SHOTS_DIR`, `INTERVAL`, `FPS`), or `~/.config/screen-record-chrome/config`.
 
+## Step 0: check setup (always do this first)
+
+    scripts/capture.sh check
+
+It prints the capture tool, whether ffmpeg is present, and a `STATUS:` line with the exact fix if anything is off.
+
+- `STATUS: ready` — go on to Capture.
+- Anything else — relay the printed steps to the user in plain words, with the install command as a copy-paste line
+  prefixed with `! ` (e.g. `! sudo apt install maim`) so they can run it in the prompt. Don't run `sudo` yourself.
+- On GNOME Wayland the only available tool flashes the screen on every shot. Offer the user the choice: record anyway
+  with a longer interval (`-i 5`), or switch to an X11 session (install `maim`, log out, pick "Ubuntu on Xorg" at the
+  gear icon; no reboot). Warn that logging out ends this Claude session and they will need to resume it.
+- Never change system settings (GDM config, gsettings) unless the user asks.
+
 ## Capture
 
 Run in the background (`run_in_background`) so the session stays usable:
@@ -31,9 +45,9 @@ With no `SESSION_DIR` it uses the newest session. Output defaults to `<SESSION_D
 ## Notes
 
 - `$ARGUMENTS` can carry the folder, interval, or FPS the user wants; map them to the flags above.
+- It records the whole screen, so other windows and tab titles end up in the video. Mention this before sharing.
 - Videos land next to their frame folders, in `~/.screen-recordings/<timestamp>.mp4` by default.
-- macOS: uses `screencapture`; the terminal app needs Screen Recording permission (System Settings > Privacy & Security). `brew install ffmpeg`.
-- Linux X11: uses `maim`, else `scrot`, else `import` (no screen flash). `sudo apt install ffmpeg maim`.
-- Linux Wayland: `grim` on sway/Hyprland; on GNOME it must be `gnome-screenshot`, the only tool GNOME allows, and it flashes the
-  screen on each shot (use a longer interval, or switch to an X11 session). `sudo apt install ffmpeg gnome-screenshot`.
+- macOS: `screencapture`; the terminal app needs Screen Recording permission (System Settings > Privacy & Security).
+- Linux X11: `maim`, else `scrot`, else `import` (no flash). Linux Wayland: `grim` on sway/Hyprland; GNOME only allows `gnome-screenshot` (flashes).
+- If the video won't play in VLC, check whether VLC itself starts; the files are plain H.264 MP4 and `ffplay <file>` is a quick check.
 - Report the output path and frame count when done. Don't delete the frames unless asked.
