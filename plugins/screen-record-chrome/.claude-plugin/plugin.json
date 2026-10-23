@@ -1,0 +1,5 @@
+{
+  "name": "screen-record-chrome",
+  "description": "Record the screen as interval screenshots, then stitch them into an MP4 with ffmpeg (macOS and Linux)",
+  "version": "1.0.0"
+}

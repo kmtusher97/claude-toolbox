@@ -7,6 +7,7 @@ A collection of [Claude Code](https://claude.ai/code) skills — slash commands 
 | Skill | Command | Description |
 |-------|---------|-------------|
 | [api-e2e](./plugins/api-e2e/) | `/api-e2e:api-e2e` | Diff branch, extract affected API endpoints, run curl tests, report pass/fail |
+| [screen-record-chrome](./plugins/screen-record-chrome/) | `/screen-record-chrome:screen-record-chrome` | Record the screen as interval screenshots and stitch them into an MP4 with ffmpeg (macOS and Linux) |
 
 ## Installation
 
@@ -46,6 +47,7 @@ Once installed via the plugin marketplace, invoke any skill inside a Claude Code
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
 - `curl` and `python3` in your shell
+- `ffmpeg` for screen-record-chrome, plus `maim` or `scrot` on Linux X11 (`gnome-screenshot` on GNOME Wayland, which flashes the screen on each shot); `screencapture` is built in on macOS
 
 ## License
 

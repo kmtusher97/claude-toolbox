@@ -12,6 +12,12 @@
       "source": "./plugins/api-e2e",
       "description": "Diff branch, extract affected API endpoints, run curl tests, report pass/fail",
       "version": "1.0.0"
+    },
+    {
+      "name": "screen-record-chrome",
+      "source": "./plugins/screen-record-chrome",
+      "description": "Record the screen as interval screenshots, then stitch them into an MP4 with ffmpeg (macOS and Linux)",
+      "version": "1.0.0"
     }
   ]
 }
